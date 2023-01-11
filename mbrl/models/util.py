@@ -7,9 +7,27 @@ from typing import List, Sequence, Tuple
 import numpy as np
 import torch
 from torch import nn as nn
+import torch.nn.functional as F
 
 import mbrl.types
 import mbrl.util.math
+
+import sys
+sys.path.append("/home/melissa/Workspace/causal-rl/causal_model/")
+
+from utils.modules.linear import BatchLinear
+
+
+class Embedding(nn.Linear):
+    def __init__(self, in_features, out_features, num_nodes=1, **kwargs):
+        self.num_nodes = num_nodes
+        self._out_features = out_features
+        super().__init__(in_features, out_features * num_nodes, **kwargs)
+
+    def forward(self, inputs):
+        outputs = super().forward(inputs)
+        outputs = outputs.view((-1, self.num_nodes, self._out_features))
+        return outputs.transpose(0, 1)
 
 
 def truncated_normal_init(m: nn.Module):
@@ -27,6 +45,52 @@ def truncated_normal_init(m: nn.Module):
             mbrl.util.math.truncated_normal_(m.weight.data[i], std=stddev)
         m.bias.data.fill_(0.0)
 
+
+class EnsembleCausalLinearLayer(nn.Module):
+
+    def __init__(self, num_members: int, in_size: int, out_size: int, bias: bool = True):
+        super(EnsembleCausalLinearLayer, self).__init__()
+        self.num_variables = 5
+        self.num_actions = 1
+        hidden_sizes = [256,256,256]
+        self.hidden_sizes = tuple(hidden_sizes) + (1,)
+        self.bias = bias
+        self.nonlinearity=F.relu
+
+        self.embedding = Embedding(self.num_variables, self.hidden_sizes[0],
+            num_nodes=self.num_variables, bias=bias)
+        self.action_embedding = Embedding(self.num_actions, self.hidden_sizes[0],
+            num_nodes=1, bias=bias)
+
+        if len(self.hidden_sizes) > 1:
+            layers = []
+            for i, hidden_size in enumerate(hidden_sizes[:-1]):
+                layers.append(BatchLinear(hidden_size,
+                    hidden_sizes[i+1], num_nodes=self.num_variables, bias=bias))
+            self.layers = nn.ModuleList(layers)
+
+            self.prediction = BatchLinear(hidden_sizes[-1], 1,
+                num_nodes=self.num_variables, bias=bias)
+
+    def forward(self, inputs):
+        """
+        inputs : torch.Tensor, shape (batch_size, num_variables)
+        actions : torch.Tensor, shape (batch_size, )
+        outputs : torch.Tensor, shape (batch_size, num_variables)
+        """
+        # Mel: TODO Why doesnt this work?
+        # act_embed = self.action_embedding(inputs[:, -1].unsqueeze(1))
+        outputs = self.embedding(inputs) # + act_embed
+
+        if len(self.hidden_sizes) > 1:
+            for layer in self.layers:
+                outputs = layer(outputs)
+                outputs = self.nonlinearity(outputs)
+            outputs = self.prediction(outputs)
+
+        outputs = torch.squeeze(outputs, dim=2)
+        # return outputs.T
+        return outputs.T
 
 class EnsembleLinearLayer(nn.Module):
     """Efficient linear layer for ensemble models."""

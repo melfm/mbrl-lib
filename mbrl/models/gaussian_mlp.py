@@ -14,7 +14,7 @@ from torch.nn import functional as F
 import mbrl.util.math
 
 from .model import Ensemble
-from .util import EnsembleLinearLayer, truncated_normal_init
+from .util import EnsembleLinearLayer, truncated_normal_init, EnsembleCausalLinearLayer
 
 
 class GaussianMLP(Ensemble):
@@ -86,6 +86,8 @@ class GaussianMLP(Ensemble):
         self.in_size = in_size
         self.out_size = out_size
 
+        self.causal_mlp = True
+
         def create_activation():
             if activation_fn_cfg is None:
                 activation_func = nn.ReLU()
@@ -96,7 +98,11 @@ class GaussianMLP(Ensemble):
             return activation_func
 
         def create_linear_layer(l_in, l_out):
-            return EnsembleLinearLayer(ensemble_size, l_in, l_out)
+            if self.causal_mlp:
+                return EnsembleCausalLinearLayer(ensemble_size, l_in, l_out)
+            else:
+                return EnsembleLinearLayer(ensemble_size, l_in, l_out)
+
 
         hidden_layers = [
             nn.Sequential(create_linear_layer(in_size, hid_size), create_activation())
@@ -108,6 +114,7 @@ class GaussianMLP(Ensemble):
                     create_activation(),
                 )
             )
+
         self.hidden_layers = nn.Sequential(*hidden_layers)
 
         if deterministic:
@@ -296,11 +303,19 @@ class GaussianMLP(Ensemble):
         pred_mean, pred_logvar = self.forward(model_in, use_propagation=False)
         if target.shape[0] != self.num_members:
             target = target.repeat(self.num_members, 1, 1)
-        nll = (
-            mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
-            .mean((1, 2))  # average over batch and target dimension
-            .sum()
-        )  # sum over ensemble dimension
+        # Mel: Switched from mean(1,2) since we are not doing ensembling.
+        if self.causal_mlp:
+            nll = (
+                mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+                .mean((0,1))  # average over batch and target dimension
+                .sum()
+            )  # sum over ensemble dimension
+        else:
+            nll = (
+                mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+                .mean((1,2))  # average over batch and target dimension
+                .sum()
+            )  # sum over ensemble dimension
         nll += 0.01 * (self.max_logvar.sum() - self.min_logvar.sum())
         return nll
 
@@ -357,7 +372,9 @@ class GaussianMLP(Ensemble):
         assert model_in.ndim == 2 and target.ndim == 2
         with torch.no_grad():
             pred_mean, _ = self.forward(model_in, use_propagation=False)
-            target = target.repeat((self.num_members, 1, 1))
+            # Mel: Uncommented since we are not doing ensembling
+            if not self.causal_mlp:
+                target = target.repeat((self.num_members, 1, 1))
             return F.mse_loss(pred_mean, target, reduction="none"), {}
 
     def sample_propagation_indices(

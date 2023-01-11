@@ -56,6 +56,9 @@ def gaussian_nll(
     Returns:
         (tensor): the negative log-likelihood.
     """
+    if target.shape[0] == 1:
+        # No ensemble
+        target = target.squeeze(0)
     l2 = F.mse_loss(pred_mean, target, reduction="none")
     inv_var = (-pred_logvar).exp()
     losses = l2 * inv_var + pred_logvar
