@@ -34,15 +34,10 @@ reward_fn = reward_fns.cartpole
 # This function allows the model to know if an observation should make the episode end
 term_fn = termination_fns.cartpole
 
-
-
 trial_length = 200
 num_trials = 10
 ensemble_size = 1
 
-# Everything with "???" indicates an option with a missing value.
-# Our utility functions will fill in these details using the 
-# environment information
 cfg_dict = {
     # dynamics model configuration
     "dynamics_model": {
@@ -133,30 +128,8 @@ def train_callback(_model, _total_calls, _epoch, tr_loss, val_score, _best_val):
     train_losses.append(tr_loss)
     val_scores.append(val_score.mean().item())   # this returns val score per ensemble model
 
-
-def update_axes(_axs, _frame, _text, _trial, _steps_trial, _all_rewards, force_update=False):
-    if not force_update and (_steps_trial % 10 != 0):
-        return
-    _axs[0].imshow(_frame)
-    _axs[0].set_xticks([])
-    _axs[0].set_yticks([])
-    _axs[1].clear()
-    _axs[1].set_xlim([0, num_trials + .1])
-    _axs[1].set_ylim([0, 200])
-    _axs[1].set_xlabel("Trial")
-    _axs[1].set_ylabel("Trial reward")
-    _axs[1].plot(_all_rewards, 'bs-')
-    _text.set_text(f"Trial {_trial + 1}: {_steps_trial} steps")
-    # display.display(plt.gcf())  
-    # display.clear_output(wait=True)
-
 # Create a trainer for the model
 model_trainer = models.ModelTrainer(dynamics_model, optim_lr=1e-3, weight_decay=5e-5)
-
-# Create visualization objects
-fig, axs = plt.subplots(1, 2, figsize=(14, 3.75), gridspec_kw={"width_ratios": [1, 1]})
-ax_text = axs[0].text(300, 50, "")
-    
 # Main PETS loop
 all_rewards = [0]
 for trial in range(num_trials):
@@ -166,7 +139,6 @@ for trial in range(num_trials):
     done = False
     total_reward = 0.0
     steps_trial = 0
-    update_axes(axs, env.render(mode="rgb_array"), ax_text, trial, steps_trial, all_rewards)
     while not done:
         # --------------- Model Training -----------------
         if steps_trial == 0:
@@ -192,8 +164,6 @@ for trial in range(num_trials):
         # --- Doing env step using the agent and adding to model dataset ---
         next_obs, reward, done, _ = common_util.step_env_and_add_to_buffer(
             env, obs, agent, {}, replay_buffer)
-        update_axes(
-            axs, env.render(mode="rgb_array"), ax_text, trial, steps_trial, all_rewards)
         
         obs = next_obs
         total_reward += reward
@@ -201,16 +171,12 @@ for trial in range(num_trials):
         
         if steps_trial == trial_length:
             break
-    
+    print('Rewards ', total_reward)
     all_rewards.append(total_reward)
 
-update_axes(axs, env.render(mode="rgb_array"), ax_text, trial, steps_trial, all_rewards, force_update=True)
 
-fig, ax = plt.subplots(2, 1, figsize=(12, 10))
-ax[0].plot(train_losses)
-ax[0].set_xlabel("Total training epochs")
-ax[0].set_ylabel("Training loss (avg. NLL)")
-ax[1].plot(val_scores)
-ax[1].set_xlabel("Total training epochs")
-ax[1].set_ylabel("Validation score (avg. MSE)")
-plt.show()
+plt.plot(all_rewards, label='Model-CausalMLP')
+plt.ylabel('Trial Rewards')
+plt.xlabel('Trial')
+plt.legend()
+plt.savefig('modelcMLP.png')

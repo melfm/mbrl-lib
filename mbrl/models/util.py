@@ -48,8 +48,9 @@ def truncated_normal_init(m: nn.Module):
 
 class EnsembleCausalLinearLayer(nn.Module):
 
-    def __init__(self, num_members: int, in_size: int, out_size: int, bias: bool = True):
+    def __init__(self, bias: bool = True):
         super(EnsembleCausalLinearLayer, self).__init__()
+        # TODO: Pass in in and out sizes
         self.num_variables = 5
         self.num_actions = 1
         hidden_sizes = [256,256,256]
@@ -89,7 +90,6 @@ class EnsembleCausalLinearLayer(nn.Module):
             outputs = self.prediction(outputs)
 
         outputs = torch.squeeze(outputs, dim=2)
-        # return outputs.T
         return outputs.T
 
 class EnsembleLinearLayer(nn.Module):

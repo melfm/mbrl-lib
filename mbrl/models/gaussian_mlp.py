@@ -87,7 +87,6 @@ class GaussianMLP(Ensemble):
         self.out_size = out_size
 
         self.causal_mlp = True
-
         def create_activation():
             if activation_fn_cfg is None:
                 activation_func = nn.ReLU()
@@ -98,35 +97,42 @@ class GaussianMLP(Ensemble):
             return activation_func
 
         def create_linear_layer(l_in, l_out):
-            if self.causal_mlp:
-                return EnsembleCausalLinearLayer(ensemble_size, l_in, l_out)
-            else:
-                return EnsembleLinearLayer(ensemble_size, l_in, l_out)
+            return EnsembleLinearLayer(ensemble_size, l_in, l_out)
 
 
-        hidden_layers = [
-            nn.Sequential(create_linear_layer(in_size, hid_size), create_activation())
-        ]
-        for i in range(num_layers - 1):
-            hidden_layers.append(
-                nn.Sequential(
-                    create_linear_layer(hid_size, hid_size),
-                    create_activation(),
-                )
-            )
+        if self.causal_mlp:
+            self.mean_and_logvar = EnsembleCausalLinearLayer()
 
-        self.hidden_layers = nn.Sequential(*hidden_layers)
-
-        if deterministic:
-            self.mean_and_logvar = create_linear_layer(hid_size, out_size)
-        else:
-            self.mean_and_logvar = create_linear_layer(hid_size, 2 * out_size)
             self.min_logvar = nn.Parameter(
                 -10 * torch.ones(1, out_size), requires_grad=learn_logvar_bounds
             )
             self.max_logvar = nn.Parameter(
                 0.5 * torch.ones(1, out_size), requires_grad=learn_logvar_bounds
             )
+
+        else:
+            hidden_layers = [
+                nn.Sequential(create_linear_layer(in_size, hid_size), create_activation())
+            ]
+            for i in range(num_layers - 1):
+                hidden_layers.append(
+                    nn.Sequential(
+                        create_linear_layer(hid_size, hid_size),
+                        create_activation(),
+                    )
+                )
+            self.hidden_layers = nn.Sequential(*hidden_layers)
+
+            if deterministic:
+                self.mean_and_logvar = create_linear_layer(hid_size, out_size)
+            else:
+                self.mean_and_logvar = create_linear_layer(hid_size, 2 * out_size)
+                self.min_logvar = nn.Parameter(
+                    -10 * torch.ones(1, out_size), requires_grad=learn_logvar_bounds
+                )
+                self.max_logvar = nn.Parameter(
+                    0.5 * torch.ones(1, out_size), requires_grad=learn_logvar_bounds
+                )
 
         self.apply(truncated_normal_init)
         self.to(self.device)
@@ -148,8 +154,11 @@ class GaussianMLP(Ensemble):
         self, x: torch.Tensor, only_elite: bool = False, **_kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         self._maybe_toggle_layers_use_only_elite(only_elite)
-        x = self.hidden_layers(x)
-        mean_and_logvar = self.mean_and_logvar(x)
+        if self.causal_mlp:
+            mean_and_logvar = self.mean_and_logvar(x)
+        else:
+            x = self.hidden_layers(x)
+            mean_and_logvar = self.mean_and_logvar(x)
         self._maybe_toggle_layers_use_only_elite(only_elite)
         if self.deterministic:
             return mean_and_logvar, None
@@ -304,18 +313,27 @@ class GaussianMLP(Ensemble):
         if target.shape[0] != self.num_members:
             target = target.repeat(self.num_members, 1, 1)
         # Mel: Switched from mean(1,2) since we are not doing ensembling.
-        if self.causal_mlp:
-            nll = (
-                mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
-                .mean((0,1))  # average over batch and target dimension
-                .sum()
-            )  # sum over ensemble dimension
-        else:
-            nll = (
-                mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
-                .mean((1,2))  # average over batch and target dimension
-                .sum()
-            )  # sum over ensemble dimension
+        # Mel : Disabling ensemble altogether
+        # if self.causal_mlp:
+        #     nll = (
+        #         mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+        #         .mean((0,1))  # average over batch and target dimension
+        #         .sum()
+        #     )  # sum over ensemble dimension
+        # else:
+        #     nll = (
+        #         mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+        #         .mean((1,2))  # average over batch and target dimension
+        #         .sum()
+        #     )  # sum over ensemble dimension
+
+        nll = (
+            mbrl.util.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+            .mean((0,1))  # average over batch and target dimension
+            .sum()
+        )  # sum over ensemble dimension
+
+
         nll += 0.01 * (self.max_logvar.sum() - self.min_logvar.sum())
         return nll
 
